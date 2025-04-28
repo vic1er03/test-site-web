@@ -7,7 +7,7 @@ from pydub import AudioSegment
 import io
 
 # --- CONFIGURATION ---
-SECRET_CODE = "TON_CODE_SECRET"  # <-- Change ici
+SECRET_CODE = 2003  # <-- Change ici
 CATEGORIES = ["rap", "afro", "rnb"]
 UPLOAD_FOLDER = "uploads"
 SUGGESTION_FILE = "suggestions.txt"
