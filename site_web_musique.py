@@ -1,204 +1,147 @@
 import streamlit as st
-from streamlit_option_menu import option_menu
 import os
-import requests
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from pydub import AudioSegment
 import io
+from pydub import AudioSegment
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
 # --- CONFIGURATION ---
-SECRET_CODE = "2003"  # <-- Change ici
-CATEGORIES = ["rap", "afro", "rnb"]
-UPLOAD_FOLDER = "uploads"
-IMAGES_FOLDER = "images"
-SUGGESTION_FILE = "suggestions.txt"
+SECRET_CODE = "2003"
 MAX_FILE_SIZE_MB = 50
-EXTRACT_DURATION_SEC = 30  # Durée de l'extrait gratuit en secondes
+EXTRACT_DURATION_SEC = 30
+CATEGORIES = ["rap", "afro", "rnb"]
+GOOGLE_DRIVE_FOLDER_ID = "TON_ID_DOSSIER"  # <- ID du dossier 'beat'
 
-# Liens d'images publiques fiables (exemples)
-IMAGE_LINKS = {
-    "accueil": "https://images.unsplash.com/photo-1511376777868-611b54f68947",
-    "upload": "https://images.unsplash.com/photo-1551907234-6f3b8fb46c27",
-    "about": "https://images.unsplash.com/photo-1531297484001-80022131f5a1",
-    "rap": "https://images.unsplash.com/photo-1618329730972-f95cf1974209",
-    "afro": "https://images.unsplash.com/photo-1598387990893-9b8b05c29746",
-    "rnb": "https://images.unsplash.com/photo-1532634726-8b9fb99825c4"
-}
+CONTACT_PHONE = "+237 6 59 35 12 77 / +226 51 61 70 14 "
+CONTACT_EMAIL = "azariazaria473@gmail.com"
 
-CATEGORY_IMAGES = {
-    "rap": f"{IMAGES_FOLDER}/rap.jpg",
-    "afro": f"{IMAGES_FOLDER}/afro.jpg",
-    "rnb": f"{IMAGES_FOLDER}/rnb.jpg"
-}
+# --- GOOGLE DRIVE CONNECTION ---
+@st.cache_resource
+def connect_to_drive():
+    credentials = service_account.Credentials.from_service_account_file(
+        'credentials.json',
+        scopes=['https://www.googleapis.com/auth/drive']
+    )
+    drive_service = build('drive', 'v3', credentials=credentials)
+    return drive_service
 
-# Email settings
-SENDER_EMAIL = "azariaazaria473@gmail.com"  # <-- ton email ici
-SENDER_PASSWORD = "TON_MOT_DE_PASSE_APP"  # mot de passe spécial application
-RECEIVER_EMAIL = "azariaazaria473@gmail.com"  # email pour notifications
+# --- LISTER FICHIERS DU DOSSIER BEAT ---
+def list_beats(drive_service):
+    results = drive_service.files().list(
+        q=f"'{GOOGLE_DRIVE_FOLDER_ID}' in parents and trashed=false",
+        fields="files(id, name)"
+    ).execute()
+    items = results.get('files', [])
+    return items
 
-# --- CRÉATION DES DOSSIERS ET TÉLÉCHARGEMENT DES IMAGES ---
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(IMAGES_FOLDER, exist_ok=True)
-
-def download_image(name, url):
-    path = f"{IMAGES_FOLDER}/{name}.jpg"
-    if not os.path.exists(path):
-        try:
-            r = requests.get(url)
-            if r.status_code == 200:
-                with open(path, 'wb') as f:
-                    f.write(r.content)
-        except Exception as e:
-            print(f"Erreur téléchargement {name}: {e}")
-
-# Télécharger toutes les images si elles manquent
-for name, url in IMAGE_LINKS.items():
-    download_image(name, url)
-
-# --- FONCTIONS UTILES ---
-def allowed_file(filename):
-    return filename.split('.')[-1].lower() in ['mp3', 'wav', 'zip', 'flac']
-
-def file_size_ok(file):
-    file.seek(0, os.SEEK_END)
-    size_mb = file.tell() / (1024 * 1024)
-    file.seek(0)
-    return size_mb <= MAX_FILE_SIZE_MB
-
-def list_files():
-    files_per_category = {}
-    for cat in CATEGORIES:
-        path = os.path.join(UPLOAD_FOLDER, cat)
-        files = os.listdir(path)
-        files_per_category[cat] = files
-    return files_per_category
-
-def send_email(subject, body, to_email):
-    message = MIMEMultipart()
-    message['From'] = SENDER_EMAIL
-    message['To'] = to_email
-    message['Subject'] = subject
-    message.attach(MIMEText(body, 'plain'))
-
-    try:
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls()
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.sendmail(SENDER_EMAIL, to_email, message.as_string())
-    except Exception as e:
-        print(f"Erreur email : {e}")
-
-def extract_audio(file_path, duration_sec=EXTRACT_DURATION_SEC):
-    sound = AudioSegment.from_file(file_path)
+# --- EXTRAIRE UN EXTRAIT AUDIO ---
+def extract_audio(file_bytes, duration_sec=EXTRACT_DURATION_SEC):
+    sound = AudioSegment.from_file(file_bytes)
     extract = sound[:duration_sec * 1000]
     buf = io.BytesIO()
     extract.export(buf, format="mp3")
     buf.seek(0)
     return buf
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Plateforme Beats", page_icon=":musical_note:", layout="wide")
+# --- TÉLÉCHARGER UN FICHIER DE GOOGLE DRIVE ---
+def download_file(drive_service, file_id):
+    request = drive_service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while done is False:
+        status, done = downloader.next_chunk()
+    fh.seek(0)
+    return fh
 
-# --- SIDEBAR AVEC MENU ---
-with st.sidebar:
-    selected = option_menu(
-        menu_title="🎵 Menu Principal", 
-        options=["Accueil", "Uploader", "À propos"], 
-        icons=["house", "cloud-upload", "info-circle"],
-        menu_icon="cast", 
-        default_index=0,
-        orientation="vertical"
-    )
+# --- UPLOADER UN FICHIER VERS DRIVE ---
+def upload_to_drive(file, filename, folder_id):
+    drive_service = connect_to_drive()
+    file_metadata = {
+        'name': filename,
+        'parents': [folder_id]
+    }
+    media = MediaIoBaseUpload(file, mimetype='application/octet-stream')
+    uploaded_file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    return uploaded_file.get('id')
 
-# --- ACCUEIL ---
-if selected == "Accueil":
-    st.title("🎶 Plateforme de Musiques & Beats")
-    st.image(f"{IMAGES_FOLDER}/accueil.jpg", caption="Bienvenue sur notre plateforme !", use_column_width=True)
-    
-    st.header("🎧 Écouter un extrait ou acheter un Beat")
-    
-    simulate_pay = st.checkbox("✅ J'ai effectué mon paiement")
-    
-    if not simulate_pay:
-        st.warning("⚠️ Vous devez effectuer un paiement pour écouter les extraits complets.")
-        st.info("Envoyez le paiement par Orange Money au numéro : +237 6XX XX XX XX")
+# --- PAGES STREAMLIT ---
+def accueil():
+    st.title("🎶 Bienvenue sur la Plateforme Beats 🎶")
+    st.write("Écoutez les extraits et téléchargez vos beats préférés !")
+    st.success(f"Contactez-nous : 📞 {CONTACT_PHONE} | 📩 {CONTACT_EMAIL}")
+
+def ecouter_acheter():
+    st.title("🎧 Écouter / Acheter Beats")
+
+    drive_service = connect_to_drive()
+    beats = list_beats(drive_service)
+
+    if not beats:
+        st.info("Aucun beat disponible pour l'instant.")
     else:
-        files = list_files()
-        for category, filelist in files.items():
-            st.subheader(f"🎵 {category.capitalize()} Beats")
-            if category in CATEGORY_IMAGES and os.path.exists(CATEGORY_IMAGES[category]):
-                st.image(CATEGORY_IMAGES[category], use_column_width=True)
+        for beat in beats:
+            st.subheader(beat['name'])
+            col1, col2 = st.columns(2)
 
-            if filelist:
-                for filename in filelist:
-                    file_path = os.path.join(UPLOAD_FOLDER, category, filename)
-                    st.markdown(f"**🎶 {filename}**")
-                    
-                    if os.path.exists(file_path):
-                        extract_audio_file = extract_audio(file_path)
-                        st.audio(extract_audio_file, format='audio/mp3')
+            with col1:
+                if st.button(f"▶️ Play Extrait - {beat['name']}", key=f"play_{beat['id']}"):
+                    file_bytes = download_file(drive_service, beat['id'])
+                    extract = extract_audio(file_bytes)
+                    st.audio(extract, format="audio/mp3")
 
-                        if st.button(f"⬇️ Télécharger {filename}", key=filename):
-                            with open(file_path, "rb") as f:
-                                st.download_button(
-                                    label=f"Télécharger {filename}",
-                                    data=f,
-                                    file_name=filename,
-                                    mime="application/octet-stream"
-                                )
-                    else:
-                        st.error(f"Le fichier {filename} n'existe pas ou a été déplacé.")
-            else:
-                st.info(f"Aucun fichier disponible pour {category.capitalize()}.")
+            with col2:
+                full_file = download_file(drive_service, beat['id'])
+                st.download_button(
+                    label=f"⬇️ Télécharger {beat['name']}",
+                    data=full_file,
+                    file_name=beat['name'],
+                    mime="application/octet-stream"
+                )
 
-# --- UPLOADER UN FICHIER ---
-elif selected == "Uploader":
-    st.title("📤 Uploader un Beat")
-    st.image(f"{IMAGES_FOLDER}/accueil.jpg", caption="Bienvenue sur notre plateforme !", use_column_width=True)
-    
-    code = st.text_input("🔒 Entrez votre code secret", type="password")
+def uploader():
+    st.title("📤 Uploader votre Beat")
 
+    code = st.text_input("Entrez votre code secret", type="password")
     if code == SECRET_CODE:
-        uploaded_file = st.file_uploader("📂 Choisissez un fichier", type=["mp3", "wav", "zip", "flac"])
-        category = st.selectbox("🎼 Choisissez une catégorie existante", options=CATEGORIES)
+        uploaded_file = st.file_uploader("Choisissez un beat", type=["mp3", "wav", "zip", "flac"])
+        category = st.selectbox("Choisissez une catégorie", options=CATEGORIES)
 
         if uploaded_file:
-            if not file_size_ok(uploaded_file):
-                st.error(f"❌ Le fichier dépasse {MAX_FILE_SIZE_MB} MB.")
+            size_mb = uploaded_file.size / (1024 * 1024)
+            if size_mb > MAX_FILE_SIZE_MB:
+                st.error(f"Le fichier dépasse {MAX_FILE_SIZE_MB} MB.")
             else:
-                if allowed_file(uploaded_file.name):
-                    save_path = os.path.join(UPLOAD_FOLDER, category, uploaded_file.name)
-                    os.makedirs(os.path.dirname(save_path), exist_ok=True)  # sécurité
-                    with open(save_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                    st.success(f"✅ Fichier {uploaded_file.name} uploadé avec succès dans {category}!")
+                if st.button("Uploader sur Google Drive"):
+                    uploaded_file.seek(0)
+                    file_id = upload_to_drive(io.BytesIO(uploaded_file.getvalue()), uploaded_file.name, GOOGLE_DRIVE_FOLDER_ID)
+                    st.success(f"✅ Upload réussi ! [Voir dans Drive](https://drive.google.com/file/d/{file_id}/view)")
+    elif code != "":
+        st.error("Code incorrect.")
 
-                    # Notification par email
-                    subject = "🎵 Nouveau Beat Uploadé"
-                    body = f"Le fichier '{uploaded_file.name}' a été uploadé dans la catégorie '{category}'."
-                    send_email(subject, body, RECEIVER_EMAIL)
-                    st.info("✉️ Notification envoyée par email.")
-                else:
-                    st.error("❌ Type de fichier non autorisé.")
-    elif code and code != SECRET_CODE:
-        st.error("🔒 Code incorrect.")
+def apropos():
+    st.title("ℹ️ À propos")
+    st.write("""
+    Cette plateforme permet aux artistes de partager, vendre et écouter des beats facilement.
 
-# --- À PROPOS ---
-elif selected == "À propos":
-    st.title("ℹ️ À propos de la plateforme")
-    st.image(f"{IMAGES_FOLDER}/about.jpg", caption="Notre équipe de créateurs passionnés", use_column_width=True)
-
-    st.markdown("""
-    ### 📞 Contactez-nous :
-    - **Téléphone Orange** : +237 6 59 35 12 77 / +226 51 61 70 14
-    - **Téléphone MTN** : +237 6YY YY YY YY
-    - **Email** : azariaazaria473@gamil.com
-
-    ### 👨‍💻 Auteurs :
-    - Kabore Wend-Waoga Azaria (Développeur)
-    - Kabore Esli Josué WendKouni (beat-maker)
-
-    Merci d'utiliser notre plateforme pour écouter, uploader et découvrir de nouveaux beats 🎶 !
+    📞 Téléphone : +237 6 59 35 12 77 / +226 51 61 70 14 
+    📩 Email : azariazaria473@gmail.com  
     """)
+
+# --- MAIN STREAMLIT ---
+def main():
+    st.sidebar.title("Menu")
+    choice = st.sidebar.selectbox("Navigation", ["Accueil", "Écouter / Acheter", "Uploader", "À propos"])
+
+    if choice == "Accueil":
+        accueil()
+    elif choice == "Écouter / Acheter":
+        ecouter_acheter()
+    elif choice == "Uploader":
+        uploader()
+    elif choice == "À propos":
+        apropos()
+
+if __name__ == "__main__":
+    main()
