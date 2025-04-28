@@ -156,7 +156,7 @@ if selected == "Accueil":
 # --- UPLOADER UN FICHIER ---
 elif selected == "Uploader":
     st.title("📤 Uploader un Beat")
-    st.image(f"{IMAGES_FOLDER}/upload.jpg", caption="Uploader votre beat facilement", use_column_width=True)
+   st.image(f"{IMAGES_FOLDER}/accueil.jpg", caption="Bienvenue sur notre plateforme !", use_column_width=True)
 
     code = st.text_input("🔒 Entrez votre code secret", type="password")
 
