@@ -9,7 +9,7 @@ from pydub import AudioSegment
 import io
 
 # --- CONFIGURATION ---
-SECRET_CODE = "TON_CODE_SECRET"  # <-- Change ici
+SECRET_CODE = "2003"  # <-- Change ici
 CATEGORIES = ["rap", "afro", "rnb"]
 UPLOAD_FOLDER = "uploads"
 IMAGES_FOLDER = "images"
@@ -34,9 +34,9 @@ CATEGORY_IMAGES = {
 }
 
 # Email settings
-SENDER_EMAIL = "ton.email@gmail.com"  # <-- ton email ici
+SENDER_EMAIL = "azariaazaria473@gmail.com"  # <-- ton email ici
 SENDER_PASSWORD = "TON_MOT_DE_PASSE_APP"  # mot de passe spécial application
-RECEIVER_EMAIL = "ton.email@gmail.com"  # email pour notifications
+RECEIVER_EMAIL = "azariaazaria473@gmail.com"  # email pour notifications
 
 # --- CRÉATION DES DOSSIERS ET TÉLÉCHARGEMENT DES IMAGES ---
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
