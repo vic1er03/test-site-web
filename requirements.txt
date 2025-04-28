@@ -1,4 +1,2 @@
 streamlit
-email
 pydub
-smtplib
