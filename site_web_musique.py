@@ -1,138 +1,140 @@
+# --- Importations ---
 import streamlit as st
+import os
+import io
+from pydub import AudioSegment
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
-import os
-from pydub import AudioSegment
-import io
 
-# --- CONFIGURATION ---
-SECRET_CODE = "TON_CODE_SECRET"
-CATEGORIES = ["rap", "afro", "rnb"]
-MAX_FILE_SIZE_MB = 50
-EXTRACT_DURATION_SEC = 30  # 30 secondes d'extrait gratuit
-
-# --- GOOGLE DRIVE CONNECTION ---
-@st.cache_resource
+# --- Connexion à Google Drive ---
 def connect_drive():
     gauth = GoogleAuth()
-    gauth.LocalWebserverAuth()
+    gauth.LoadCredentialsFile("credentials.json")
+    if gauth.credentials is None:
+        gauth.LocalWebserverAuth()
+    elif gauth.access_token_expired:
+        gauth.Refresh()
+    else:
+        gauth.Authorize()
+    gauth.SaveCredentialsFile("credentials.json")
     return GoogleDrive(gauth)
 
+# --- Initialiser Drive ---
 drive = connect_drive()
 
-# --- FONCTIONS ---
+# --- Vérifier ou créer dossier "beats" ---
+def get_or_create_folder(drive, folder_name):
+    file_list = drive.ListFile({'q': "mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
+    for file in file_list:
+        if file['title'] == folder_name:
+            return file['id']
 
-# Vérifier extension
-def allowed_file(filename):
-    return filename.split('.')[-1].lower() in ['mp3', 'wav', 'zip', 'flac']
+    # Dossier non trouvé => créer
+    folder_metadata = {'title': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+    folder = drive.CreateFile(folder_metadata)
+    folder.Upload()
+    return folder['id']
 
-# Vérifier la taille
-def file_size_ok(file):
-    file.seek(0, os.SEEK_END)
-    size_mb = file.tell() / (1024 * 1024)
-    file.seek(0)
-    return size_mb <= MAX_FILE_SIZE_MB
+FOLDER_NAME = "beats"
+FOLDER_ID = get_or_create_folder(drive, FOLDER_NAME)
 
-# Extraire extrait audio
-def extract_audio(file_path, duration_sec=EXTRACT_DURATION_SEC):
-    sound = AudioSegment.from_file(file_path)
-    extract = sound[:duration_sec * 1000]  # en millisecondes
+# --- Lister les beats dans le Drive ---
+def list_beats():
+    query = f"'{FOLDER_ID}' in parents and trashed=false"
+    files = drive.ListFile({'q': query}).GetList()
+    return files
+
+# --- Uploader un beat ---
+def upload_beat(file):
+    temp_file_path = f"temp_{file.name}"
+    with open(temp_file_path, "wb") as f:
+        f.write(file.getbuffer())
+
+    beat_file = drive.CreateFile({'title': file.name, 'parents': [{'id': FOLDER_ID}]})
+    beat_file.SetContentFile(temp_file_path)
+    beat_file.Upload()
+    os.remove(temp_file_path)
+
+# --- Extraire un extrait de 30 secondes ---
+def extract_audio(file_path_or_buffer, duration_sec=30):
+    sound = AudioSegment.from_file(file_path_or_buffer)
+    extract = sound[:duration_sec * 1000]
     buf = io.BytesIO()
     extract.export(buf, format="mp3")
     buf.seek(0)
     return buf
 
-# Cherche un dossier existant sinon le crée
-def get_or_create_folder(name):
-    folder_list = drive.ListFile({'q': "mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
-    for folder in folder_list:
-        if folder['title'].lower() == name.lower():
-            return folder['id']
-    
-    # Sinon créer
-    folder_metadata = {
-        'title': name,
-        'mimeType': 'application/vnd.google-apps.folder'
-    }
-    folder = drive.CreateFile(folder_metadata)
-    folder.Upload()
-    return folder['id']
+# --- Interface Streamlit ---
 
-# Upload vers Drive
-def upload_to_drive(file, filename, category):
-    folder_id = get_or_create_folder(category)
-    gfile = drive.CreateFile({'parents': [{'id': folder_id}], 'title': filename})
-    gfile.SetContentString(file.read().decode('latin1'))
-    gfile.Upload()
-    return gfile['id']
+st.set_page_config(page_title="Plateforme Beats", page_icon="🎵")
 
-# Lister les fichiers
-def list_drive_files(folder_id):
-    file_list = drive.ListFile({'q': f"'{folder_id}' in parents and trashed=false"}).GetList()
-    return file_list
+# Code secret pour uploader
+SECRET_CODE = "MONCODE123"  # <-- Tu peux changer ici
 
-# --- STREAMLIT APP ---
+# Sidebar navigation
+menu = st.sidebar.selectbox("Navigation", ["Accueil", "Uploader un Beat", "À propos"])
 
-st.set_page_config(page_title="Plateforme Beats", page_icon=":musical_note:")
+st.sidebar.image("https://cdn-icons-png.flaticon.com/512/727/727240.png", width=150)
 
-# Sidebar Navigation
-menu = st.sidebar.selectbox("Menu", ["Accueil", "Uploader", "À propos"])
-
-st.image("https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4", use_column_width=True)
-
-# Accueil
 if menu == "Accueil":
-    st.title("🎵 Bienvenue sur la Plateforme Beats")
-    st.subheader("Écoutez un extrait et achetez vos beats préférés !")
+    st.title("🎵 Beats disponibles")
 
-    for category in CATEGORIES:
-        st.header(f"🎶 Catégorie : {category.capitalize()}")
-        folder_id = get_or_create_folder(category)
-        files = list_drive_files(folder_id)
+    beats = list_beats()
 
-        if not files:
-            st.info("Aucun fichier disponible.")
-        else:
-            for f in files:
-                filename = f['title']
-                file_id = f['id']
-                
-                st.markdown(f"**{filename}**")
-                download_url = f"https://drive.google.com/uc?id={file_id}"
+    if not beats:
+        st.info("Aucun beat disponible pour le moment.")
+    else:
+        for beat in beats:
+            st.subheader(beat['title'])
 
-                if st.button(f"▶️ Écouter extrait : {filename}", key=f"play_{file_id}"):
-                    st.audio(download_url)
+            # Télécharger temporairement l'extrait
+            temp_file_path = f"temp_{beat['title']}"
+            beat.GetContentFile(temp_file_path)
 
-                st.markdown(f"[⬇️ Télécharger {filename}](https://drive.google.com/uc?id={file_id})", unsafe_allow_html=True)
+            # Lire l'extrait
+            audio_extract = extract_audio(temp_file_path)
+            st.audio(audio_extract, format='audio/mp3')
 
-# Uploader
-elif menu == "Uploader":
-    st.title("🚀 Uploader un nouveau Beat")
-    code = st.text_input("Entrez votre code secret", type="password")
+            # Bouton de téléchargement
+            with open(temp_file_path, "rb") as full_file:
+                st.download_button(
+                    label=f"📥 Télécharger {beat['title']}",
+                    data=full_file,
+                    file_name=beat['title'],
+                    mime='audio/mpeg'
+                )
+
+            os.remove(temp_file_path)
+
+elif menu == "Uploader un Beat":
+    st.title("⬆️ Uploader votre Beat")
+
+    code = st.text_input("Entrez votre code secret pour uploader :", type="password")
 
     if code == SECRET_CODE:
-        uploaded_file = st.file_uploader("Choisissez un fichier", type=["mp3", "wav", "zip", "flac"])
-        category = st.selectbox("Catégorie", options=CATEGORIES)
+        uploaded_file = st.file_uploader("Choisissez un fichier audio", type=["mp3", "wav", "zip", "flac"])
 
-        if uploaded_file:
-            if not file_size_ok(uploaded_file):
-                st.error(f"Le fichier dépasse {MAX_FILE_SIZE_MB}MB.")
-            else:
-                if allowed_file(uploaded_file.name):
-                    upload_to_drive(uploaded_file, uploaded_file.name, category)
-                    st.success(f"✅ Fichier {uploaded_file.name} uploadé avec succès dans {category} !")
-                else:
-                    st.error("Type de fichier non autorisé.")
+        if uploaded_file is not None:
+            upload_beat(uploaded_file)
+            st.success(f"✅ Fichier {uploaded_file.name} uploadé avec succès dans le Drive !")
     elif code:
-        st.error("❌ Code incorrect.")
+        st.error("❌ Code incorrect. Vous ne pouvez pas uploader.")
 
-# A propos
 elif menu == "À propos":
-    st.title("📞 À propos")
-    st.write("""
-    - **Créé par** : Azaria
-    - **Contact** : +237 6XX XX XX XX
-    - **Email** : azariazaria473@gmail.com
+    st.title("ℹ️ À propos")
+
+    st.image("https://cdn-icons-png.flaticon.com/512/4059/4059920.png", width=200)
+
+    st.markdown("""
+    ### Développeurs :
+    - 📞 **Azaria** : +237 6XX XX XX XX
+    - 📧 Email : azariazaria473@gmail.com
+
+    ### Fonctionnalités :
+    - 🎵 Uploader vos beats avec un code secret
+    - 🎧 Écouter un extrait de 30 secondes avant achat
+    - 📥 Télécharger vos beats préférés
+
+    Plateforme propulsée par **Streamlit** et **Google Drive API** 🚀
     """)
-    st.image("https://images.unsplash.com/photo-1546443046-ed1ce6ffd1a9", use_column_width=True)
 
