@@ -116,7 +116,7 @@ with st.sidebar:
 if selected == "Accueil":
     st.title("🎶 Plateforme de Musiques & Beats")
     st.image(f"{IMAGES_FOLDER}/accueil.jpg", caption="Bienvenue sur notre plateforme !", use_column_width=True)
-
+    
     st.header("🎧 Écouter un extrait ou acheter un Beat")
     
     simulate_pay = st.checkbox("✅ J'ai effectué mon paiement")
