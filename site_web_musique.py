@@ -3,62 +3,83 @@ import streamlit as st
 import os
 import io
 from pydub import AudioSegment
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
-# --- Connexion à Google Drive ---
+# --- Connexion à Google Drive via compte de service ---
 def connect_drive():
-    gauth = GoogleAuth()
-    gauth.LoadCredentialsFile("credentials.json")
-    if gauth.credentials is None:
-        gauth.LocalWebserverAuth()
-    elif gauth.access_token_expired:
-        gauth.Refresh()
-    else:
-        gauth.Authorize()
-    gauth.SaveCredentialsFile("credentials.json")
-    return GoogleDrive(gauth)
+    SERVICE_ACCOUNT_FILE = 'credentials.json'  # Fichier de clés du compte de service
+    SCOPES = ['https://www.googleapis.com/auth/drive.file']  # Scope pour l'accès au fichier Drive
 
-# --- Initialiser Drive ---
-drive = connect_drive()
+    credentials = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+
+    try:
+        # Créer un service Google Drive
+        service = build('drive', 'v3', credentials=credentials)
+        return service
+    except HttpError as error:
+        st.error(f"Une erreur s'est produite lors de la connexion à Google Drive : {error}")
+        return None
+
+# --- Initialiser Google Drive ---
+service = connect_drive()
 
 # --- Vérifier ou créer dossier "beats" ---
-def get_or_create_folder(drive, folder_name):
-    file_list = drive.ListFile({'q': "mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
-    for file in file_list:
-        if file['title'] == folder_name:
-            return file['id']
+def get_or_create_folder(service, folder_name):
+    # Liste des fichiers dans Drive pour chercher le dossier
+    query = f"mimeType='application/vnd.google-apps.folder' and trashed=false and name='{folder_name}'"
+    results = service.files().list(q=query).execute()
+    items = results.get('files', [])
 
-    # Dossier non trouvé => créer
-    folder_metadata = {'title': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-    folder = drive.CreateFile(folder_metadata)
-    folder.Upload()
-    return folder['id']
+    if items:
+        # Dossier trouvé, on retourne son ID
+        return items[0]['id']
+    else:
+        # Dossier non trouvé, on crée un nouveau dossier
+        file_metadata = {
+            'name': folder_name,
+            'mimeType': 'application/vnd.google-apps.folder'
+        }
+        folder = service.files().create(body=file_metadata, fields='id').execute()
+        return folder['id']
 
 FOLDER_NAME = "beats"
-FOLDER_ID = get_or_create_folder(drive, FOLDER_NAME)
+FOLDER_ID = get_or_create_folder(service, FOLDER_NAME)
 
-# --- Lister les beats dans le Drive ---
+# --- Lister les beats dans Google Drive ---
 def list_beats():
-    query = f"'{FOLDER_ID}' in parents and trashed=false"
-    files = drive.ListFile({'q': query}).GetList()
-    return files
+    try:
+        query = f"'{FOLDER_ID}' in parents and trashed=false"
+        results = service.files().list(q=query).execute()
+        files = results.get('files', [])
+        return files
+    except HttpError as error:
+        st.error(f"Une erreur s'est produite lors de la récupération des beats : {error}")
+        return []
 
 # --- Uploader un beat ---
 def upload_beat(file):
-    temp_file_path = f"temp_{file.name}"
-    with open(temp_file_path, "wb") as f:
-        f.write(file.getbuffer())
+    try:
+        # Sauvegarder le fichier temporairement pour l'upload
+        temp_file_path = f"temp_{file.name}"
+        with open(temp_file_path, "wb") as f:
+            f.write(file.getbuffer())
 
-    beat_file = drive.CreateFile({'title': file.name, 'parents': [{'id': FOLDER_ID}]})
-    beat_file.SetContentFile(temp_file_path)
-    beat_file.Upload()
-    os.remove(temp_file_path)
+        file_metadata = {'name': file.name, 'parents': [FOLDER_ID]}
+        media = MediaFileUpload(temp_file_path, mimetype='audio/mpeg')
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+        os.remove(temp_file_path)  # Supprimer le fichier temporaire
+        st.success(f"✅ Fichier {file.name} uploadé avec succès dans Google Drive !")
+    except HttpError as error:
+        st.error(f"Une erreur s'est produite lors de l'upload du beat : {error}")
 
 # --- Extraire un extrait de 30 secondes ---
 def extract_audio(file_path_or_buffer, duration_sec=30):
     sound = AudioSegment.from_file(file_path_or_buffer)
-    extract = sound[:duration_sec * 1000]
+    extract = sound[:duration_sec * 1000]  # Extraire les 30 premières secondes
     buf = io.BytesIO()
     extract.export(buf, format="mp3")
     buf.seek(0)
@@ -69,7 +90,7 @@ def extract_audio(file_path_or_buffer, duration_sec=30):
 st.set_page_config(page_title="Plateforme Beats", page_icon="🎵")
 
 # Code secret pour uploader
-SECRET_CODE = "MONCODE123"  # <-- Tu peux changer ici
+SECRET_CODE = "Josue2006"  # <-- Tu peux changer ici
 
 # Sidebar navigation
 menu = st.sidebar.selectbox("Navigation", ["Accueil", "Uploader un Beat", "À propos"])
@@ -85,11 +106,13 @@ if menu == "Accueil":
         st.info("Aucun beat disponible pour le moment.")
     else:
         for beat in beats:
-            st.subheader(beat['title'])
+            st.subheader(beat['name'])
 
             # Télécharger temporairement l'extrait
-            temp_file_path = f"temp_{beat['title']}"
-            beat.GetContentFile(temp_file_path)
+            temp_file_path = f"temp_{beat['name']}"
+            request = service.files().get_media(fileId=beat['id'])
+            with open(temp_file_path, "wb") as f:
+                f.write(request.execute())
 
             # Lire l'extrait
             audio_extract = extract_audio(temp_file_path)
@@ -98,9 +121,9 @@ if menu == "Accueil":
             # Bouton de téléchargement
             with open(temp_file_path, "rb") as full_file:
                 st.download_button(
-                    label=f"📥 Télécharger {beat['title']}",
+                    label=f"📥 Télécharger {beat['name']}",
                     data=full_file,
-                    file_name=beat['title'],
+                    file_name=beat['name'],
                     mime='audio/mpeg'
                 )
 
@@ -116,7 +139,6 @@ elif menu == "Uploader un Beat":
 
         if uploaded_file is not None:
             upload_beat(uploaded_file)
-            st.success(f"✅ Fichier {uploaded_file.name} uploadé avec succès dans le Drive !")
     elif code:
         st.error("❌ Code incorrect. Vous ne pouvez pas uploader.")
 
@@ -127,7 +149,8 @@ elif menu == "À propos":
 
     st.markdown("""
     ### Développeurs :
-    - 📞 **Azaria** : +237 6XX XX XX XX
+    - 📞 **KABORE Wend-Waoga Azaria** : +237 6 59 35 12 77
+    - 📞 **KABORE Josué Esli** : +226 51 61 70 14
     - 📧 Email : azariazaria473@gmail.com
 
     ### Fonctionnalités :
@@ -137,4 +160,3 @@ elif menu == "À propos":
 
     Plateforme propulsée par **Streamlit** et **Google Drive API** 🚀
     """)
-
