@@ -1,4 +1,9 @@
 streamlit
-pydrive
 pydub
-oauth2client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+google-api-core
+googleapis-common-protos
+pydrive
